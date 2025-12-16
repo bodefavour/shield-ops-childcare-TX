@@ -1,30 +1,9 @@
 const multer = require('multer');
 const path = require('path');
-const fs = require('fs');
 
-const uploadsDir = path.join(process.cwd(), 'uploads');
-if (!fs.existsSync(uploadsDir)) {
-  fs.mkdirSync(uploadsDir, { recursive: true });
-}
-
-const storage = multer.diskStorage({
-  destination: function (req, file, cb) {
-    const facilityId = req.params.facilityId || 'general';
-    const facilityDir = path.join(uploadsDir, facilityId);
-    
-    if (!fs.existsSync(facilityDir)) {
-      fs.mkdirSync(facilityDir, { recursive: true });
-    }
-    
-    cb(null, facilityDir);
-  },
-  filename: function (req, file, cb) {
-    const uniqueSuffix = Date.now() + '-' + Math.round(Math.random() * 1E9);
-    const ext = path.extname(file.originalname);
-    const baseName = path.basename(file.originalname, ext).replace(/[^a-zA-Z0-9]/g, '_');
-    cb(null, `${baseName}-${uniqueSuffix}${ext}`);
-  }
-});
+// Use memory storage for Supabase Storage uploads
+// Files are stored as Buffer objects in req.file.buffer
+const storage = multer.memoryStorage();
 
 const fileFilter = (req, file, cb) => {
   const allowedMimes = [
@@ -35,13 +14,16 @@ const fileFilter = (req, file, cb) => {
     'application/msword',
     'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
     'application/vnd.ms-excel',
-    'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet'
+    'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+    'text/csv',
+    'text/plain',
+    'application/csv'
   ];
-  
+
   if (allowedMimes.includes(file.mimetype)) {
     cb(null, true);
   } else {
-    cb(new Error('Invalid file type. Only PDF, images, Word, and Excel files are allowed.'), false);
+    cb(new Error(`Invalid file type: ${file.mimetype}. Allowed: PDF, images, Word, Excel, CSV, and text files.`), false);
   }
 };
 
@@ -49,7 +31,7 @@ const upload = multer({
   storage: storage,
   fileFilter: fileFilter,
   limits: {
-    fileSize: 10 * 1024 * 1024
+    fileSize: 10 * 1024 * 1024 // 10MB limit
   }
 });
 
