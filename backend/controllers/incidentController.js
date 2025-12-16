@@ -1,31 +1,43 @@
-const db = require('../config/database');
-const Incident = require('../models/Incident');
+const supabase = require('../config/supabase');
 
 async function getAllIncidents(req, res) {
   try {
     const { facilityId } = req.params;
     const { type, severity, startDate, endDate } = req.query;
-    
-    let incidents = await db.list(`incident:${facilityId}:`);
-    
+
+    let query = supabase
+      .from('incidents')
+      .select('*')
+      .eq('facility_id', facilityId)
+      .order('occurred_at', { ascending: false });
+
     if (type) {
-      incidents = incidents.filter(inc => inc.type && inc.type.toLowerCase() === type.toLowerCase());
+      query = query.eq('type', type.toLowerCase());
     }
-    
+
     if (severity) {
-      incidents = incidents.filter(inc => inc.severity && inc.severity.toLowerCase() === severity.toLowerCase());
+      query = query.eq('severity', severity.toLowerCase());
     }
-    
+
     if (startDate) {
-      incidents = incidents.filter(inc => new Date(inc.dateTime) >= new Date(startDate));
+      query = query.gte('occurred_at', startDate);
     }
-    
+
     if (endDate) {
-      incidents = incidents.filter(inc => new Date(inc.dateTime) <= new Date(endDate));
+      query = query.lte('occurred_at', endDate);
     }
-    
-    incidents.sort((a, b) => new Date(b.dateTime) - new Date(a.dateTime));
-    
+
+    const { data: incidents, error } = await query;
+
+    if (error) {
+      console.error('Error fetching incidents:', error);
+      return res.status(500).json({
+        success: false,
+        message: 'Error fetching incidents',
+        error: error.message
+      });
+    }
+
     res.json({
       success: true,
       count: incidents.length,
@@ -34,9 +46,9 @@ async function getAllIncidents(req, res) {
     });
   } catch (error) {
     console.error('Error fetching incidents:', error);
-    res.status(500).json({ 
-      success: false, 
-      message: 'Error fetching incidents' 
+    res.status(500).json({
+      success: false,
+      message: 'Error fetching incidents'
     });
   }
 }
@@ -44,33 +56,50 @@ async function getAllIncidents(req, res) {
 async function createIncident(req, res) {
   try {
     const { facilityId } = req.params;
-    
-    const incident = new Incident({
-      ...req.body,
-      facilityId
-    });
-    
-    const errors = incident.validate();
-    if (errors.length > 0) {
-      return res.status(400).json({ 
-        success: false, 
-        message: 'Validation failed', 
-        errors 
+
+    // Transform data to match Supabase schema
+    const incidentData = {
+      facility_id: facilityId,
+      type: req.body.type,
+      severity: req.body.severity,
+      child_info: {
+        name: req.body.childName,
+        age: req.body.childAge
+      },
+      location: req.body.location,
+      description: req.body.description,
+      immediate_actions: req.body.immediateActions,
+      occurred_at: req.body.dateTime || new Date().toISOString(),
+      reported_by: req.body.reportedBy,
+      parent_notified: req.body.parentNotified || false,
+      parent_signature: req.body.parentSignature || null
+    };
+
+    const { data: incident, error } = await supabase
+      .from('incidents')
+      .insert(incidentData)
+      .select()
+      .single();
+
+    if (error) {
+      console.error('Error creating incident:', error);
+      return res.status(500).json({
+        success: false,
+        message: 'Error creating incident report',
+        error: error.message
       });
     }
-    
-    await db.set(`incident:${facilityId}:${incident.id}`, incident.toJSON());
-    
+
     res.status(201).json({
       success: true,
       message: 'Incident report created successfully',
-      data: incident.toJSON()
+      data: incident
     });
   } catch (error) {
     console.error('Error creating incident:', error);
-    res.status(500).json({ 
-      success: false, 
-      message: 'Error creating incident report' 
+    res.status(500).json({
+      success: false,
+      message: 'Error creating incident report'
     });
   }
 }
@@ -78,25 +107,29 @@ async function createIncident(req, res) {
 async function getIncidentById(req, res) {
   try {
     const { incidentId } = req.params;
-    
-    const incident = await db.getByPrefix(`incident:`, (key, value) => value.id === incidentId);
-    
-    if (!incident) {
-      return res.status(404).json({ 
-        success: false, 
-        message: 'Incident not found' 
+
+    const { data: incident, error } = await supabase
+      .from('incidents')
+      .select('*')
+      .eq('id', incidentId)
+      .single();
+
+    if (error || !incident) {
+      return res.status(404).json({
+        success: false,
+        message: 'Incident not found'
       });
     }
-    
+
     res.json({
       success: true,
       data: incident
     });
   } catch (error) {
     console.error('Error fetching incident:', error);
-    res.status(500).json({ 
-      success: false, 
-      message: 'Error fetching incident' 
+    res.status(500).json({
+      success: false,
+      message: 'Error fetching incident'
     });
   }
 }
@@ -105,46 +138,92 @@ async function addParentSignature(req, res) {
   try {
     const { incidentId } = req.params;
     const { signature, signedBy } = req.body;
-    
+
     if (!signature || !signedBy) {
-      return res.status(400).json({ 
-        success: false, 
-        message: 'Signature and signedBy are required' 
+      return res.status(400).json({
+        success: false,
+        message: 'Signature and signedBy are required'
       });
     }
-    
-    const existingIncident = await db.getByPrefix(`incident:`, (key, value) => value.id === incidentId);
-    
-    if (!existingIncident) {
-      return res.status(404).json({ 
-        success: false, 
-        message: 'Incident not found' 
+
+    const { data: incident, error } = await supabase
+      .from('incidents')
+      .update({
+        parent_signature: {
+          signature,
+          signedBy,
+          signedAt: new Date().toISOString()
+        },
+        updated_at: new Date().toISOString()
+      })
+      .eq('id', incidentId)
+      .select()
+      .single();
+
+    if (error || !incident) {
+      return res.status(404).json({
+        success: false,
+        message: 'Incident not found or error updating',
+        error: error?.message
       });
     }
-    
-    const updatedIncident = new Incident({
-      ...existingIncident,
-      parentSignature: {
-        signature,
-        signedBy,
-        signedAt: new Date().toISOString()
-      },
-      parentSignatureDate: new Date().toISOString(),
-      updatedAt: new Date().toISOString()
-    });
-    
-    await db.set(`incident:${updatedIncident.facilityId}:${incidentId}`, updatedIncident.toJSON());
-    
+
     res.json({
       success: true,
       message: 'Parent signature added successfully',
-      data: updatedIncident.toJSON()
+      data: incident
     });
   } catch (error) {
     console.error('Error adding parent signature:', error);
-    res.status(500).json({ 
-      success: false, 
-      message: 'Error adding parent signature' 
+    res.status(500).json({
+      success: false,
+      message: 'Error adding parent signature'
+    });
+  }
+}
+
+async function deleteIncident(req, res) {
+  try {
+    const { incidentId } = req.params;
+
+    // First check if incident exists
+    const { data: incident, error: fetchError } = await supabase
+      .from('incidents')
+      .select('*')
+      .eq('id', incidentId)
+      .single();
+
+    if (fetchError || !incident) {
+      return res.status(404).json({
+        success: false,
+        message: 'Incident not found'
+      });
+    }
+
+    // Delete the incident
+    const { error: deleteError } = await supabase
+      .from('incidents')
+      .delete()
+      .eq('id', incidentId);
+
+    if (deleteError) {
+      console.error('Error deleting incident:', deleteError);
+      return res.status(500).json({
+        success: false,
+        message: 'Error deleting incident',
+        error: deleteError.message
+      });
+    }
+
+    res.json({
+      success: true,
+      message: 'Incident deleted successfully'
+    });
+  } catch (error) {
+    console.error('Error deleting incident:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Error deleting incident'
     });
   }
 }
@@ -153,5 +232,6 @@ module.exports = {
   getAllIncidents,
   createIncident,
   getIncidentById,
-  addParentSignature
+  addParentSignature,
+  deleteIncident
 };
