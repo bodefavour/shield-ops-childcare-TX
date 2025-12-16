@@ -10,8 +10,6 @@ dist/
 build/
 
 # Environment variables
-.env
-.env.local
 .env.*.local
 
 # Python
@@ -60,3 +58,4 @@ uploads/
 *.db
 *.sqlite
 *.sqlite3
+config.bat
